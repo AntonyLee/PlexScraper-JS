@@ -5,13 +5,14 @@
 var fs = require("fs"),
     cheerio = require("cheerio"),
     request = require("superagent"),
-    progress = require("superagent-progress"),
     eventproxy = require("eventproxy"),
     retry = require("bluebird-retry"),
     Sharp = require("sharp"),
     format = require('string-format'),
     path = require("path")
 
+
+var debug = require("debug")("spider");
 
 var Scrapper = require("./scrapper.js");
 
@@ -39,7 +40,7 @@ Spider.prototype = {
             if (err)
                 throw err;
             else
-                console.log("Search result of " + self.movieIdTag + " saved to file " + fileToWrite);
+                debug("Search result of " + self.movieIdTag + " saved to file " + fileToWrite);
         })
     },
 
@@ -50,7 +51,7 @@ Spider.prototype = {
         var $ = cheerio.load(searchResult);
         var movieUrl = $(".movie-box").attr("href");
 
-        console.log("Movie Url = " + movieUrl);
+        debug("Movie Url = " + movieUrl);
 
         return movieUrl;
     },
@@ -59,23 +60,23 @@ Spider.prototype = {
         var self = this;
         // request from server
         return retry(function () {
-            console.log("Crawling page: " + url);
+            debug("Crawling page: " + url);
 
             return request.get(url)
                 .then(function (response) {
                     // success
                     let result = response.res;
-                    console.log("result.statusCode = " + result.statusCode);
+                    debug("result.statusCode = " + result.statusCode);
                     if (result && result.statusCode === 200) {
-                        console.log("result.returnValue = " + result.returnValue);
-                        console.log("search url SUCCESS!");
+                        debug("result.returnValue = " + result.returnValue);
+                        debug("search url SUCCESS!");
                         return result;
                     } else {
                         throw new Error("search idtag failed");
                     }
                 })
                 .catch(function (error) {
-                    console.log("connection reset");
+                    debug("connection reset");
                     throw new Error("search idtag failed");
                 })
         }, {
@@ -84,12 +85,12 @@ Spider.prototype = {
             backoff: 1,
         })
         .then(function (result) {
-            console.log("request search result SUCCESS");
+            debug("request search result SUCCESS");
             // get the search result
             return result;
         })
         .catch(function(error) {
-            console.log("error = " + error);
+            debug("error = " + error);
             return {};
         })
     },
@@ -113,12 +114,12 @@ Spider.prototype = {
         var cacheFileName = WORKING_DIR + this.movieIdTag + "_search_page";
         return self.loadFromCache(cacheFileName)
             .then(function(buffer) {
-                console.log("search page loaded from cache: " + cacheFileName);
+                debug("search page loaded from cache: " + cacheFileName);
                 return self.getMovieUrlFromSearchResult(buffer);
             })
             .catch(function(err) {
                 var url = self.getSearchUrl();
-                console.log("search page requesting from: " + url);
+                debug("search page requesting from: " + url);
                 return self.crawlPage(url)
                     .then(function(result) {
                         self.writeToFile(result.text, cacheFileName);
@@ -129,31 +130,31 @@ Spider.prototype = {
     },
 
     crawlMoviePage: function(movieUrl) {
-        console.log("Crawling movie page: " + movieUrl);
+        debug("Crawling movie page: " + movieUrl);
         let self = this;
         // check search result exists
         var cacheFileName = WORKING_DIR + this.movieIdTag + "_movie_page";
 
         return self.loadFromCache(cacheFileName)
             .then((buffer) => {
-                console.log("movie page loaded from cache: " + cacheFileName);
+                debug("movie page loaded from cache: " + cacheFileName);
                 return buffer;
             })
             .catch((err) => {
-                console.log("movie page requesting from: " + movieUrl);
+                debug("movie page requesting from: " + movieUrl);
                 return self.crawlPage(movieUrl)
                     .then(function (result) {
                         self.writeToFile(result.text, cacheFileName);
                         return result.text;
                     })
                     .catch(function (err) {
-                        console.log(err);
+                        debug(err);
                     })
             })
     },
 
     parsingMetadata: function(html) {
-        // console.log(html);
+        // debug(html);
         var scrapper = new Scrapper();
         return scrapper.scrapeFromHtmlBuffer(html);
     }
@@ -162,14 +163,14 @@ Spider.prototype = {
 
 var downloadImage = function(url, dst) {
 
-    console.log("Start downloading image url = ", url);
+    debug("Start downloading image url = ", url);
     var httpStream = request.get(url);
     var writeStream = fs.createWriteStream(dst);
 
     var totalLength = 0;
     httpStream.on("data", (chunk) => {
         totalLength += chunk.length;
-        console.log("received data %d", totalLength);
+        debug("received data %d", totalLength);
     })
 
     httpStream.pipe(writeStream);
@@ -179,9 +180,9 @@ var downloadImage = function(url, dst) {
 
 var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
 
-    console.log("generatePosterFromFanart: ");
-    console.log("fanartImgFileName: " + fanartImgFileName);
-    console.log("posterImgFileName: " + posterImgFileName);
+    debug("generatePosterFromFanart: ");
+    debug("fanartImgFileName: " + fanartImgFileName);
+    debug("posterImgFileName: " + posterImgFileName);
 
     var image = Sharp(fanartImgFileName);
 
@@ -189,7 +190,7 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
         var posterImgWidth = metadata.width;
         var posterImgHeight = metadata.height;
 
-        console.log("{posterImgWidth: %d, posterImgHeight : %d}", posterImgWidth, posterImgHeight);
+        debug("{posterImgWidth: %d, posterImgHeight : %d}", posterImgWidth, posterImgHeight);
 
         var cropWidth = Math.floor(posterImgWidth/2.11);
 
@@ -250,12 +251,12 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
             cropWidth = cropWidth -14;
         }
 
-        console.log("%s %s %s", cropWidth, posterImgWidth, posterImgHeight);
+        debug("%s %s %s", cropWidth, posterImgWidth, posterImgHeight);
 
         image.resize(cropWidth, posterImgHeight)
             .crop(Sharp.gravity.east)
             .on("error", function(err) {
-                console.log(err);
+                debug(err);
             })
             .toFile(posterImgFileName);
     })
@@ -263,7 +264,7 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
 
 
 var scrape = function(idtag) {
-    console.log("start scrapping : " + idtag);
+    debug("start scrapping : " + idtag);
     let spider = new Spider({movieIdTag: idtag});
     return spider.crawlSearchPage()
         .then(spider.crawlMoviePage.bind(spider))   // step 1: crawl page
@@ -285,7 +286,7 @@ var scrapeFull = function (idtag) {
             if (!fs.existsSync(fanartFileName)){
                 return downloadImage(metadata.fanart, fanartFileName)
                     .then(() => {
-                        console.log("Fanart downloaded: %s", fanartFileName);
+                        debug("Fanart downloaded: %s", fanartFileName);
                         return metadata;
                     })
             }

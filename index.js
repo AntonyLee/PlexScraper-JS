@@ -3,11 +3,13 @@ var program = require("commander"),
     path = require("path"),
     format = require("string-format"),
     streamToPromise = require("stream-to-promise"),
-    EventProxy = require("eventproxy")
-
+    EventProxy = require("eventproxy"),
+    logger = require("tracer").colorConsole();
 
 var regex_const = require("./const"),
-    spider = require("./spider");
+    spider = require("./spider"),
+    utility = require("./utility"),
+    env = require("./const")
 
 program.version("0.0.1")
         .option('-d, --dir [value]', 'Set folder to traverse', '')
@@ -19,34 +21,14 @@ const ROOT_DIR = program.dir;
 const SEARCH_DEPTH = program.maxdepth;
 const MOVE_TO_DIR_ROOT = "/Users/abusimbely/Documents/DST_DIR/";
 
-var isVideoFile = function (file) {
-    let ext = path.extname(file);
-    if (ext == ".avi"
-        || ext == ".mp4"
-        || ext == ".rmvb"
-        || ext == ".rm"
-        || ext == ".mkv") {
-        return true;
-    }
-    else
-        return false;
-}
-
-var isCensoredVideo = function(file) {
-    let result = false;
-    if (file.search(regex_const.REGEX_IDTAG) >= 0) {
-        return true;
-    }
-    // console.log("   isCensoredVideo: " + result);
-    return result;
-}
-
 let videoFiles = [];
 let foldersToTraverse = [];
 
 var traverseDir = function(dir, depth) {
+    logger.log("Traversing dir %s, depth %j", dir, depth);
+
     if (!dir) {
-        console.log("Invalid dir: " + dir);
+        logger.log("Invalid dir: " + dir);
         return
     }
 
@@ -55,11 +37,10 @@ var traverseDir = function(dir, depth) {
     }
 
     if (depth >= SEARCH_DEPTH) {
+        logger.log("Current depth %d is larger than MAX_DEPTH %d", depth, SEARCH_DEPTH);
         return ;
     }
 
-    console.log("");
-    console.log(">>> traversing dir %s, depth %j ==========", dir, depth);
 
     if (!fs.lstatSync(dir).isDirectory())
         return ;
@@ -67,14 +48,14 @@ var traverseDir = function(dir, depth) {
     files = fs.readdirSync(dir);
     files.forEach((file) => {
         let absPath = path.join(dir, file);
-        // console.log("path: %s", absPath);
+        // logger.log("path: %s", absPath);
 
         let stat = fs.lstatSync(absPath);
         if (stat.isDirectory()) {
-            // console.log("New directory located: " + absPath);
+            // logger.log("New directory located: " + absPath);
             foldersToTraverse.push({path: absPath, depth: depth + 1});
-        } else if (isVideoFile(file) && isCensoredVideo(file)) {
-            console.log("Video file located: " + absPath);
+        } else if (utility.isVideoFile(file) && utility.isCensoredVideo(file)) {
+            logger.log("Video file located: " + absPath);
             videoFiles.push(absPath);
         }
 
@@ -83,19 +64,8 @@ var traverseDir = function(dir, depth) {
         if (nextDir)
             traverseDir(nextDir.path, nextDir.depth);
     })
-}
 
-//递归创建目录 同步方法
-function mkdirsSync(dirname) {
-    console.log(dirname);
-    if (fs.existsSync(dirname)) {
-        return true;
-    } else {
-        if (mkdirsSync(path.dirname(dirname))) {
-            fs.mkdirSync(dirname);
-            return true;
-        }
-    }
+    logger.log("Traversing finished.");
 }
 
 
@@ -113,8 +83,8 @@ var moveVideoFile = function(videoFile, metadata) {
 
     let dstPath = path.join(MOVE_TO_DIR_ROOT, actorsStr, titleName);
     let dstFullName = path.join(dstPath, titleName+extName);
-    console.log("Move file to : " + dstFullName);
-    mkdirsSync(dstPath);
+    logger.log("Move file to : " + dstFullName);
+    utility.mkdir(dstPath);
     return fs.rename(videoFile, dstFullName)
         .then((result) => {
             let nfoFileName = path.join(dstPath, titleName+".nfo");
@@ -133,18 +103,14 @@ var scrapeABatch = function (videos, ep) {
         ep.emit("batch scrapped", {});
     })
 
+    let promises = [];
+
     videos.forEach((video) => {
-        console.log(">>> Start Scrapping Video <<<");
-        console.log(">>> %s", video);
 
+        let basename = path.basename(video);
         let idtag = video.match(regex_const.REGEX_IDTAG);
-        console.log(idtag);
-        if (idtag instanceof Array) {
-            idtag = idtag[idtag.length-1];
-        }
 
-        // console.log(idtag);
-        spider.scrape(idtag, path.dirname(video))
+        let promise = spider.scrapeFull(idtag)
             .then((metadata) => {
                 if (program.moveFile) {
                     return moveVideoFile(video, metadata);
@@ -156,30 +122,31 @@ var scrapeABatch = function (videos, ep) {
                 ep.emit("video scrapped", metadata);
             })
             .catch((err) => {
-                console.log(err);
+                logger.log(err);
                 ep.emit("video scrapped", {});
             })
+
+        promises.push(promise);
     })
 }
 
 var scrapeAllVideos = function (videos) {
 
-    console.log("========= =========== ========");
-    console.log("scrapeAllVideos")
+    logger.log("scrapeAllVideos")
 
     if (videos.length <= 0) {
-        console.log("No videos to scrape");
+        logger.log("No videos to scrape");
         return ;
     }
 
-    const VIDEO_COUNT_A_BATCH = 2;
+    const VIDEO_COUNT_A_BATCH = 1;
     let batchCount = Math.ceil(videos.length / VIDEO_COUNT_A_BATCH);
 
-    console.log("DEBUG: VIDEO BATCHES, count = %d", batchCount);
+    logger.debug("VIDEO BATCHES, count = %d", batchCount);
     let batches = [];
     for (let i = 0; i < batchCount; ++i) {
         let batch = videos.slice(0, VIDEO_COUNT_A_BATCH);
-        console.log("batch: %s", batch);
+        logger.log("batch: %s", batch);
         batches.push(batch);
         videos.splice(0, VIDEO_COUNT_A_BATCH);
     }
@@ -187,18 +154,31 @@ var scrapeAllVideos = function (videos) {
     let ep = new EventProxy();
     let currBatch = 0;
 
-    ep.after("batch scrapped", 1, function (results) {
-        console.log("batch scrappped");
-        console.log("");
-        console.log("");
+    ep.on("batch scrapped", function (result) {
+        logger.log("batch scrappped");
+
         currBatch += 1;
 
-        scrapeABatch(batches[currBatch], ep);
+        if (currBatch < batchCount) {
+            scrapeABatch(batches[currBatch], ep);
+        }
     })
 
     scrapeABatch(batches[currBatch], ep);
 }
 
 
-traverseDir(ROOT_DIR, SEARCH_DEPTH);
-scrapeAllVideos(videoFiles);
+var prepareEnv = function() {
+    if (!fs.existsSync(env.WORKING_DIR)) {
+        utility.mkdir(env.WORKING_DIR);
+    }
+}
+
+var main = function () {
+    prepareEnv();
+    traverseDir(ROOT_DIR);
+    scrapeAllVideos(videoFiles);
+}
+
+main();
+

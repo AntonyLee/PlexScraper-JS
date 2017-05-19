@@ -1,7 +1,8 @@
 
 var cheerio = require("cheerio"),
     regex_const = require("./const.js").REGEX_IDTAG;
-    XMLWriter = require("xml-writer");
+    XMLWriter = require("xml-writer"),
+    logger = require("tracer").colorConsole();
 
 var xw = new XMLWriter;
 
@@ -17,7 +18,7 @@ Scrapper.prototype = {
         if (element) {
             var idText = element.text().trim();
             idText = idText.replace("识别码: ", "");
-            console.log("metadata.id = " + idText);
+            logger.log("metadata.id = " + idText);
             return idText;
         } else {
             throw new Error("scrape id tag failed");
@@ -30,7 +31,7 @@ Scrapper.prototype = {
             var title = element.text().trim();
             title = title.replace(regex_const.REGEX_IDTAG, "");
             title = title.trim();
-            console.log("Movie title scrapped = " + title);
+            logger.log("Movie title scrapped = " + title);
             return title;
 
         } else {
@@ -56,10 +57,10 @@ Scrapper.prototype = {
             })
         }
 
-        console.log("Actors:");
+        logger.log("Actors:");
         actors.forEach(function (actor) {
-            console.log(actor.actorName);
-            console.log(actor.actorThumbUrl);
+            logger.log(actor.actorName);
+            logger.log(actor.actorThumbUrl);
         })
 
         return actors;
@@ -72,7 +73,7 @@ Scrapper.prototype = {
         var releaseDate = element.text().trim();
         releaseDate = releaseDate.replace("发行时间:", "").trim();
 
-        console.log("Release Date = " + releaseDate);
+        logger.log("Release Date = " + releaseDate);
         return releaseDate;
     },
 
@@ -89,7 +90,7 @@ Scrapper.prototype = {
         genres.forEach(function(genre) {
             genreString += genre + " ";
         });
-        console.log("Genres: " + genreString);
+        logger.log("Genres: " + genreString);
 
         return genres;
     },
@@ -101,7 +102,7 @@ Scrapper.prototype = {
         director = element.text();
         director = director.replace("导演: ", "").trim();
 
-        console.log("director: " + director);
+        logger.log("director: " + director);
 
         return director;
     },
@@ -110,7 +111,7 @@ Scrapper.prototype = {
         var element = $("div.container p:contains(制作商:)").first().next();
 
         var studio = element.text().replace("制作商:", "").trim();
-        console.log("Studio: " + studio);
+        logger.log("Studio: " + studio);
 
         return studio;
     },
@@ -120,7 +121,7 @@ Scrapper.prototype = {
 
         var label = element.text().replace("发行商:", "").trim();
 
-        console.log("Label: " + label);
+        logger.log("Label: " + label);
 
         return label;
     },
@@ -128,13 +129,13 @@ Scrapper.prototype = {
     scrapePoster($) {
         var element = $("a.bigImage img").first();
         var fanart = element.attr("src").trim();
-        console.log("poster url = " + fanart);
+        logger.log("poster url = " + fanart);
         return fanart;
     },
 
     scrapeFromHtmlBuffer(buffer) {
 
-        console.log("Start scrapping...");
+        logger.log("Start scrapping...");
 
         var metadata = {};
 
@@ -159,7 +160,7 @@ Scrapper.prototype = {
                     if (idx < array.length - 1)
                         actorString += ", ";
                 })
-                console.log(actorString);
+                logger.log(actorString);
                 return actorString;
             }
 
@@ -190,16 +191,16 @@ Scrapper.prototype = {
                     movie.endElement();
                     xw.endDocument();
 
-                    console.log("xw.toString() " + xw.toString());
+                    logger.log("xw.toString() " + xw.toString());
                 } catch (err) {
-                    console.log(err);
+                    logger.log(err);
                 }
                 return xw.toString();
             }
 
 
         } catch(err) {
-            console.log(err);
+            logger.log(err);
         }
 
         return metadata;

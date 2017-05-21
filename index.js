@@ -3,11 +3,9 @@ var program = require("commander"),
     path = require("path"),
     format = require("string-format"),
     streamToPromise = require("stream-to-promise"),
-    EventProxy = require("eventproxy"),
     logger = require("tracer").colorConsole();
 
-var regex_const = require("./const"),
-    spider = require("./spider"),
+var spider = require("./spider"),
     utility = require("./utility"),
     env = require("./const")
 
@@ -19,7 +17,6 @@ program.version("0.0.1")
 
 const ROOT_DIR = program.dir;
 const SEARCH_DEPTH = program.maxdepth;
-const MOVE_TO_DIR_ROOT = "/Users/abusimbely/Documents/DST_DIR/";
 
 let videoFiles = [];
 let foldersToTraverse = [];
@@ -40,7 +37,6 @@ var traverseDir = function(dir, depth) {
         logger.log("Current depth %d is larger than MAX_DEPTH %d", depth, SEARCH_DEPTH);
         return ;
     }
-
 
     if (!fs.lstatSync(dir).isDirectory())
         return ;
@@ -76,41 +72,63 @@ var moveVideoFile = function(videoFile, metadata) {
         actorsStr += actor.actorName;
     });
 
-    let baseName = path.basename(videoFile);
-    let extName = path.extname(videoFile);
 
     let titleName = format("({0})({1}){2}", metadata.id, metadata.studio, metadata.title);
+    let dstPath = path.join(env.MOVE_TO_DIR_ROOT, actorsStr, titleName);
 
-    let dstPath = path.join(MOVE_TO_DIR_ROOT, actorsStr, titleName);
-    let dstFullName = path.join(dstPath, titleName+extName);
-    logger.log("Move file to : " + dstFullName);
-    utility.mkdir(dstPath);
-    return fs.rename(videoFile, dstFullName)
-        .then((result) => {
-            let nfoFileName = path.join(dstPath, titleName+".nfo");
-            let writeStream = fs.createWriteStream(nfoFileName);
-            writeStream.write(metadata.toXMLString());
-            return streamToPromise(writeStream).then(() => {return metadata});
-        })
-        .then(function (result) {
-            return metadata;
-        })
+    if (!fs.existsSync(dstPath))
+        utility.mkdir(dstPath);
+
+    let videoFileBaseName = path.basename(videoFile);
+    let videoFileExtName = path.extname(videoFile);
+
+    // collect file need to rename
+    let renameArr = [];
+    // 1. video file
+    renameArr.push({
+        from: videoFile,
+        to: path.join(dstPath, titleName+videoFileExtName)
+    })
+
+    // 2. nfo file
+    renameArr.push({
+        from: utility.getNfoFilePath(metadata.id),
+        to: path.join(dstPath, titleName + ".nfo"),
+    })
+
+
+    // 3. fanart files
+    renameArr.push({
+        from: utility.getFanartFilePath(metadata.id),
+        to: path.join(dstPath, titleName + "-fanart.jpg")
+    });
+    renameArr.push({
+        from: utility.getPosterFilePath(metadata.id),
+        to: path.join(dstPath, titleName + "-poster.jpg")
+    });
+
+
+    let promises = [];
+    renameArr.forEach((rename) => {
+        logger.log(rename);
+        // promises.push(Promise.resolve(0));
+        promises.push(fs.rename(rename.from, rename.to));
+    })
+
+    return Promise.all(promises).then(()=> {return metadata;})
 }
 
-var scrapeABatch = function (videos, ep) {
-
-    ep.after("video scrapped", videos.length, function (metadatas) {
-        ep.emit("batch scrapped", {});
-    })
+async function scrapeABatch(videos) {
 
     let promises = [];
 
     videos.forEach((video) => {
 
-        let basename = path.basename(video);
-        let idtag = video.match(regex_const.REGEX_IDTAG);
+        logger.debug("video = %s", video)
 
-        let promise = spider.scrapeFull(idtag)
+        let idTag = utility.getIdTagFromFileName(video.toString());
+
+        let promise = spider.scrapeFull(idTag)
             .then((metadata) => {
                 if (program.moveFile) {
                     return moveVideoFile(video, metadata);
@@ -118,16 +136,16 @@ var scrapeABatch = function (videos, ep) {
                     return metadata;
                 }
             })
-            .then((metadata) => {
-                ep.emit("video scrapped", metadata);
-            })
-            .catch((err) => {
-                logger.log(err);
-                ep.emit("video scrapped", {});
-            })
+
+        promise.catch((err) => {
+            logger.log(err);
+            throw err;
+        })
 
         promises.push(promise);
     })
+
+    return Promise.all(promises);
 }
 
 var scrapeAllVideos = function (videos) {
@@ -151,20 +169,22 @@ var scrapeAllVideos = function (videos) {
         videos.splice(0, VIDEO_COUNT_A_BATCH);
     }
 
-    let ep = new EventProxy();
-    let currBatch = 0;
-
-    ep.on("batch scrapped", function (result) {
-        logger.log("batch scrappped");
-
-        currBatch += 1;
-
-        if (currBatch < batchCount) {
-            scrapeABatch(batches[currBatch], ep);
+    function asyncScrape(j) { // ATTENTION: this is a closure
+        return function () {
+            return scrapeABatch(batches[j]);
         }
-    })
+    }
 
-    scrapeABatch(batches[currBatch], ep);
+    let funcArr = [];
+    for (let i = 0; i < batchCount; ++i) {
+        funcArr.push(asyncScrape(i));
+    }
+
+    let masters = [];
+    masters[0] = funcArr[0]();
+    for (let i = 1; i < funcArr.length; ++i) {
+        masters[i] = masters[i-1].then(funcArr[i]);
+    }
 }
 
 

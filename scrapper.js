@@ -1,6 +1,6 @@
 
 var cheerio = require("cheerio"),
-    regex_const = require("./const.js").REGEX_IDTAG;
+    regex_const = require("./const.js");
     XMLWriter = require("xml-writer"),
     logger = require("tracer").colorConsole();
 

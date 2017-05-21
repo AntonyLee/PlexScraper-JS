@@ -1,5 +1,5 @@
 
-var regex_const = require("./const")
+var C = require("./const")
 
 var fs = require("fs-extra"),
     path = require("path")
@@ -32,16 +32,38 @@ var isVideoFile = function (file) {
 
 var isCensoredVideo = function(file) {
     let result = false;
-    if (file.search(regex_const.REGEX_IDTAG) >= 0) {
+    if (file.search(C.REGEX_IDTAG) >= 0) {
         return true;
     }
-    // logger.log("   isCensoredVideo: " + result);
     return result;
+}
+
+var getIdTagFromFileName = function (fileName) {
+
+    let baseName = path.basename(fileName)
+    let idTag = baseName.match(C.REGEX_IDTAG);
+
+    return idTag;
+}
+
+var getNfoFilePath = function (idTag) {
+    return C.WORKING_DIR + idTag + ".nfo";
+}
+
+var getFanartFilePath = function (idTag) {
+    return C.WORKING_DIR + idTag + "-fanart.jpg";
+}
+
+var getPosterFilePath = function (idTag) {
+    return C.WORKING_DIR + idTag + "-poster.jpg";
 }
 
 module.exports = {
     mkdir: mkdirsSync,
     isVideoFile: isVideoFile,
-    isCensoredVideo: isCensoredVideo
-
+    isCensoredVideo: isCensoredVideo,
+    getIdTagFromFileName: getIdTagFromFileName,
+    getNfoFilePath: getNfoFilePath,
+    getFanartFilePath: getFanartFilePath,
+    getPosterFilePath: getPosterFilePath
 }

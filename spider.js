@@ -8,12 +8,10 @@ var fs = require("fs-extra"),
     progress = require("superagent-progress"),
     eventproxy = require("eventproxy"),
     retry = require("bluebird-retry"),
-    Sharp = require("sharp"),
+    gm = require("gm"),
     format = require('string-format'),
     path = require("path"),
-    logger = require("tracer").colorConsole(),
-    streamToPromise = require("stream-to-promise")
-
+    logger = require("tracer").colorConsole()
 
 require("superagent-retry")(request);
 
@@ -32,7 +30,7 @@ Spider.prototype = {
 
     getSearchUrl() {
         // return "www.avmoo.com/cn/search/" + this.movieIdTag;
-        return "www.avio.pw/cn/search/" + this.movieIdTag;
+        return "https://avio.pw/cn/search/" + this.movieIdTag;
     },
 
     writeToFile: function (htmlText, fileToWrite) {
@@ -65,12 +63,15 @@ Spider.prototype = {
             logger.log("Crawling page: " + url);
 
             return request.get(url)
+                .timeout({
+                    response: 2000,
+                    deadline: 20000,
+                })
                 .then(function (response) {
                     // success
                     let result = response.res;
                     logger.log("result.statusCode = " + result.statusCode);
                     if (result && result.statusCode === 200) {
-                        logger.log("result.returnValue = " + result.returnValue);
                         logger.log("search url SUCCESS!");
                         return result;
                     } else {
@@ -90,10 +91,6 @@ Spider.prototype = {
             logger.log("request search result SUCCESS");
             // get the search result
             return result;
-        })
-        .catch(function(error) {
-            logger.log("error = " + error);
-            return {};
         })
     },
 
@@ -126,7 +123,7 @@ Spider.prototype = {
                     .then(function(result) {
                         self.writeToFile(result.text, cacheFileName);
                         return self.getMovieUrlFromSearchResult(result.text);
-                    });
+                    })
             })
 
     },
@@ -225,82 +222,93 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
     logger.log("fanartImgFileName: " + fanartImgFileName);
     logger.log("posterImgFileName: " + posterImgFileName);
 
-    var image = Sharp(fanartImgFileName);
 
-    image.metadata(function (err, metadata) {
-        var posterImgWidth = metadata.width;
-        var posterImgHeight = metadata.height;
+    let promise = new Promise(function (resolve, reject) {
+        gm(fanartImgFileName)
+            .size(function (err, size) {
 
-        logger.log("{posterImgWidth: %d, posterImgHeight : %d}", posterImgWidth, posterImgHeight);
+                if (err) {
+                    reject(err);
+                }
 
-        var cropWidth = Math.floor(posterImgWidth/2.11);
+                let posterImgWidth = size.width;
+                let posterImgHeight = size.height;
 
-        //SOD (SDMS, SDDE) - crop 3 pixels
-        if (fanartImgFileName.search("SDDE") || fanartImgFileName.search("SDMS"))
-            cropWidth = cropWidth - 3;
-        //Natura High - crop 2 pixels
-        if (fanartImgFileName.search("NHDT"))
-            cropWidth = cropWidth - 2;
-        //HTY - crop 1 pixel
-        if (fanartImgFileName.search("HTV"))
-            cropWidth = cropWidth - 1;
-        //Prestige (EVO, DAY, ZER, EZD, DOM) crop 1 pixel
-        if (fanartImgFileName.search("EVO") || fanartImgFileName.search("DAY") || fanartImgFileName.search("ZER") || fanartImgFileName.search("EZD") || fanartImgFileName.search("DOM") && posterImgHeight == 522)
-            cropWidth = cropWidth - 1;
-        //DOM - overcrop a little
-        if (fanartImgFileName.search("DOM") && posterImgHeight == 488)
-            cropWidth = cropWidth + 13;
-        //DIM - crop 5 pixels
-        if (fanartImgFileName.search("DIM"))
-            cropWidth = cropWidth - 5;
-        //DNPD - the front is on the left and a different crop routine will be used below
-        //CRZ - crop 5 pixels
-        if (fanartImgFileName.search("CRZ") && posterImgHeight == 541)
-            cropWidth = cropWidth - 5;
-        //FSET - crop 2 pixels
-        if (fanartImgFileName.search("FSET") && posterImgHeight == 675)
-            cropWidth = cropWidth - 2;
-        //Moodyz (MIRD dual discs - the original code says to center the overcropping but provides no example so I'm not dooing anything for now)
-        //Opera (ORPD) - crop 1 pixel
-        if (fanartImgFileName.search("DIM"))
-            cropWidth = cropWidth - 1;
-        //Jade (P9) - crop 2 pixels
-        if (fanartImgFileName.search("P9"))
-            cropWidth = cropWidth - 2;
-        //Rocket (RCT) - Crop 2 Pixels
-        if (fanartImgFileName.search("RCT"))
-            cropWidth = cropWidth - 2;
-        //SIMG - crop 10 pixels
-        if (fanartImgFileName.search("SIMG") && posterImgHeight == 864)
-            cropWidth = cropWidth - 10;
-        //SIMG - crop 4 pixels
-        if (fanartImgFileName.search("SIMG") && posterImgHeight == 541)
-            cropWidth = cropWidth - 4;
-        //SVDVD - crop 2 pixels
-        if (fanartImgFileName.search("SVDVD") && posterImgHeight == 950)
-            cropWidth = cropWidth - 4;
-        //XV-65 - crop 6 pixels
-        if (fanartImgFileName.search("XV-65") && posterImgHeight == 750)
-            cropWidth = cropWidth - 6;
-        //800x538 - crop 2 pixels
-        if (posterImgHeight == 538 && posterImgWidth == 800)
-            cropWidth = cropWidth - 2;
-        //800x537 - crop 1 pixel
-        if (posterImgHeight == 537 && posterImgWidth == 800)
-            cropWidth = cropWidth - 1;
-        if (posterImgHeight == 513 && posterImgWidth == 800)			{
-            cropWidth = cropWidth -14;
-        }
+                logger.log("{posterImgWidth: %d, posterImgHeight : %d}", posterImgWidth, posterImgHeight);
 
-        logger.log("%s %s %s", cropWidth, posterImgWidth, posterImgHeight);
+                var cropWidth = Math.floor(posterImgWidth/2 * 0.95);
 
-        image.resize(cropWidth, posterImgHeight)
-            .crop(Sharp.gravity.east)
-            .on("error", function(err) {
-                logger.log(err);
+                //SOD (SDMS, SDDE) - crop 3 pixels
+                if (fanartImgFileName.search("SDDE") || fanartImgFileName.search("SDMS"))
+                    cropWidth = cropWidth - 3;
+                //Natura High - crop 2 pixels
+                if (fanartImgFileName.search("NHDT"))
+                    cropWidth = cropWidth - 2;
+                //HTY - crop 1 pixel
+                if (fanartImgFileName.search("HTV"))
+                    cropWidth = cropWidth - 1;
+                //Prestige (EVO, DAY, ZER, EZD, DOM) crop 1 pixel
+                if (fanartImgFileName.search("EVO") || fanartImgFileName.search("DAY") || fanartImgFileName.search("ZER") || fanartImgFileName.search("EZD") || fanartImgFileName.search("DOM") && posterImgHeight == 522)
+                    cropWidth = cropWidth - 1;
+                //DOM - overcrop a little
+                if (fanartImgFileName.search("DOM") && posterImgHeight == 488)
+                    cropWidth = cropWidth + 13;
+                //DIM - crop 5 pixels
+                if (fanartImgFileName.search("DIM"))
+                    cropWidth = cropWidth - 5;
+                //DNPD - the front is on the left and a different crop routine will be used below
+                //CRZ - crop 5 pixels
+                if (fanartImgFileName.search("CRZ") && posterImgHeight == 541)
+                    cropWidth = cropWidth - 5;
+                //FSET - crop 2 pixels
+                if (fanartImgFileName.search("FSET") && posterImgHeight == 675)
+                    cropWidth = cropWidth - 2;
+                //Moodyz (MIRD dual discs - the original code says to center the overcropping but provides no example so I'm not dooing anything for now)
+                //Opera (ORPD) - crop 1 pixel
+                if (fanartImgFileName.search("DIM"))
+                    cropWidth = cropWidth - 1;
+                //Jade (P9) - crop 2 pixels
+                if (fanartImgFileName.search("P9"))
+                    cropWidth = cropWidth - 2;
+                //Rocket (RCT) - Crop 2 Pixels
+                if (fanartImgFileName.search("RCT"))
+                    cropWidth = cropWidth - 2;
+                //SIMG - crop 10 pixels
+                if (fanartImgFileName.search("SIMG") && posterImgHeight == 864)
+                    cropWidth = cropWidth - 10;
+                //SIMG - crop 4 pixels
+                if (fanartImgFileName.search("SIMG") && posterImgHeight == 541)
+                    cropWidth = cropWidth - 4;
+                //SVDVD - crop 2 pixels
+                if (fanartImgFileName.search("SVDVD") && posterImgHeight == 950)
+                    cropWidth = cropWidth - 4;
+                //XV-65 - crop 6 pixels
+                if (fanartImgFileName.search("XV-65") && posterImgHeight == 750)
+                    cropWidth = cropWidth - 6;
+                //800x538 - crop 2 pixels
+                if (posterImgHeight == 538 && posterImgWidth == 800)
+                    cropWidth = cropWidth - 2;
+                //800x537 - crop 1 pixel
+                if (posterImgHeight == 537 && posterImgWidth == 800)
+                    cropWidth = cropWidth - 1;
+                if (posterImgHeight == 513 && posterImgWidth == 800)			{
+                    cropWidth = cropWidth -14;
+                }
+
+                logger.log("%d %d %d %d", 0, posterImgWidth - cropWidth, posterImgWidth, posterImgHeight);
+
+                this.crop(cropWidth, posterImgHeight, posterImgWidth - cropWidth, 0)
+                    .write(posterImgFileName, function (err) {
+                        if (err) {
+                            reject(err);
+                        } else {
+                            resolve();
+                        }
+                    })
             })
-            .toFile(posterImgFileName);
     })
+
+    return promise;
 }
 
 var scrape = function(idtag) {
@@ -322,7 +330,7 @@ var scrapeFull = function (idtag) {
         .then(spider.crawlMoviePage.bind(spider))   // step 1: crawl page
         .then(function(htmlBuffer) {                // step 2: scrape metadata & generate nfo
             let metadata = spider.parsingMetadata(htmlBuffer);
-            let nfoFileName = env.WORKING_DIR+metadata.id+".nfo";
+            let nfoFileName = utility.getNfoFilePath(metadata.id);
 
             return fs.writeFile(nfoFileName, metadata.toXMLString())
                 .then(() => {
@@ -332,7 +340,7 @@ var scrapeFull = function (idtag) {
         .then((metadata) => {                       // step 3: download fanart file
             logger.log("Checking fanart...");
 
-            var fanartFileName = env.WORKING_DIR+metadata.id+"-fanart.jpg";
+            var fanartFileName = utility.getFanartFilePath(metadata.id);
 
             if (!fs.existsSync(fanartFileName)){
 
@@ -349,12 +357,15 @@ var scrapeFull = function (idtag) {
         })
         .then(function (metadata) {                 // step 4: generate poster
 
-            var fanartFileName = env.WORKING_DIR+metadata.id+"-fanart.jpg";
-            var posterFileName = env.WORKING_DIR+metadata.id+"-poster.jpg";
+            var fanartFileName = utility.getFanartFilePath(metadata.id);
+            var posterFileName = utility.getPosterFilePath(metadata.id);
 
 
-            generatePosterFromFanart(fanartFileName, posterFileName);
-            return metadata;
+            return generatePosterFromFanart(fanartFileName, posterFileName)
+                .then(() => {return metadata})
+        })
+        .catch( (err) => {
+            logger.log(err);
         })
 
 }

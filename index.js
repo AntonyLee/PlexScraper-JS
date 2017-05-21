@@ -2,7 +2,6 @@ var program = require("commander"),
     fs = require("fs-extra"),
     path = require("path"),
     format = require("string-format"),
-    streamToPromise = require("stream-to-promise"),
     logger = require("tracer").colorConsole();
 
 var spider = require("./spider"),
@@ -68,8 +67,12 @@ var traverseDir = function(dir, depth) {
 var moveVideoFile = function(videoFile, metadata) {
     let actorsStr = "";
 
-    metadata.actors.forEach((actor) => {
-        actorsStr += actor.actorName;
+    metadata.actors.forEach((actor, index, array) => {
+        if (index == array.length - 1) {
+            actorsStr += actor.actorName;
+        } else {
+            actorsStr += actor.actorName + ", ";
+        }
     });
 
 
@@ -118,7 +121,7 @@ var moveVideoFile = function(videoFile, metadata) {
     return Promise.all(promises).then(()=> {return metadata;})
 }
 
-async function scrapeABatch(videos) {
+function scrapeABatch(videos) {
 
     let promises = [];
 

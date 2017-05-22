@@ -2,9 +2,12 @@
 var cheerio = require("cheerio"),
     regex_const = require("./const.js");
     XMLWriter = require("xml-writer"),
-    logger = require("tracer").colorConsole();
+    fs = require("fs-extra"),
+    utility = require("./utility")
 
-var xw = new XMLWriter;
+
+
+var logger = utility.requireLogger();
 
 function Scrapper() {
 }
@@ -111,6 +114,7 @@ Scrapper.prototype = {
         var element = $("div.container p:contains(制作商:)").first().next();
 
         var studio = element.text().replace("制作商:", "").trim();
+        studio = studio.replace("/", "");
         logger.log("Studio: " + studio);
 
         return studio;
@@ -133,6 +137,18 @@ Scrapper.prototype = {
         return fanart;
     },
 
+    scrapeFanart($) {
+        var elements = $("div#sample-waterfall a.sample-box");
+        let array = []
+        if (elements) {
+            elements.each((index, ele) => {
+                let url = ele.attribs.href;
+                array.push(url);
+            })
+        }
+        return array;
+    },
+
     scrapeFromHtmlBuffer(buffer) {
 
         logger.log("Start scrapping...");
@@ -151,7 +167,8 @@ Scrapper.prototype = {
             metadata.studio = this.scrapeStudio($);
             metadata.studio = metadata.studio.replace("アイデアポケット", "IDEA POCKET");
             metadata.label = this.scrapeLabel($);
-            metadata.fanart = this.scrapePoster($);
+            metadata.poster = this.scrapePoster($);
+            metadata.fanarts = this.scrapeFanart($);
 
             metadata.actors.toString = function () {
                 var actorString = ""
@@ -165,18 +182,21 @@ Scrapper.prototype = {
             }
 
             metadata.toXMLString = function (){
+                var xw = new XMLWriter;
 
                 try {
                     xw.startDocument();
                     let movie = xw.startElement("movie");
                     movie.writeElement("id", this.id);
-                    movie.writeElement("title", this.title);
+                    movie.writeElement("title", this.id+" "+this.title);
                     movie.writeElement("year", this.releaseDate.slice(0, 4));
                     movie.writeElement("releaseDate", this.releaseDate);
                     movie.writeElement("studio", this.studio);
-                    movie.writeElement("thumb", this.fanart)
+                    movie.writeElement("thumb", this.poster)
                     let fanartElement = movie.startElement("fanart");
-                    fanartElement.writeElement("thumb", this.fanart);
+                    this.fanarts.forEach((fanart) => {
+                        fanartElement.writeElement("thumb", fanart);
+                    })
                     fanartElement.endElement();
                     movie.writeElement("director", this.director);
                     this.genres.forEach((genre) => {

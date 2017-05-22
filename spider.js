@@ -5,19 +5,16 @@
 var fs = require("fs-extra"),
     cheerio = require("cheerio"),
     request = require("superagent"),
-    progress = require("superagent-progress"),
-    eventproxy = require("eventproxy"),
     retry = require("bluebird-retry"),
     gm = require("gm"),
     format = require('string-format'),
-    path = require("path"),
-    logger = require("tracer").colorConsole()
-
-require("superagent-retry")(request);
+    path = require("path")
 
 var Scrapper = require("./scrapper.js");
     utility = require("./utility"),
     env = require("./const")
+
+var logger = utility.requireLogger();
 
 function Spider(options) {
     options = this.options = options || {};
@@ -29,19 +26,12 @@ Spider.prototype = {
     constructor: Spider,
 
     getSearchUrl() {
-        // return "www.avmoo.com/cn/search/" + this.movieIdTag;
         return "https://avio.pw/cn/search/" + this.movieIdTag;
     },
 
     writeToFile: function (htmlText, fileToWrite) {
-        var self = this;
 
-        fs.writeFile(fileToWrite, htmlText, (err) => {
-            if (err)
-                throw err;
-            else
-                logger.log("Search result of " + self.movieIdTag + " saved to file " + fileToWrite);
-        })
+        return fs.writeFile(fileToWrite, htmlText);
     },
 
     getMovieUrlFromSearchResult: function (searchResult) {
@@ -56,44 +46,66 @@ Spider.prototype = {
         return movieUrl;
     },
 
+
     crawlPage: function(url) {
-        var self = this;
-        // request from server
+
         return retry(function () {
             logger.log("Crawling page: " + url);
 
             return request.get(url)
                 .timeout({
-                    response: 2000,
-                    deadline: 20000,
+                    response: 5000,
+                    deadline: 10000,
                 })
                 .then(function (response) {
-                    // success
                     let result = response.res;
-                    logger.log("result.statusCode = " + result.statusCode);
-                    if (result && result.statusCode === 200) {
-                        logger.log("search url SUCCESS!");
-                        return result;
-                    } else {
-                        throw new Error("search idtag failed");
-                    }
+                    return result;
                 })
                 .catch(function (error) {
-                    logger.log("connection reset");
-                    throw new Error("search idtag failed");
+                    logger.log(error);
+                    throw error;
                 })
         }, {
-            max_tries: 10,
+            max_tries: 2,
             interval: 5000,
             backoff: 1,
         })
-        .then(function (result) {
-            logger.log("request search result SUCCESS");
-            // get the search result
-            return result;
-        })
     },
 
+    crawlImage: function(url, dst) {
+
+        return retry(function () {
+            logger.log("Start downloading image url = ", url);
+
+            var httpStream = request.get(url)
+                .timeout({
+                    response: 20000,
+                    deadline: 30000,
+                })
+                .on("response", (response) => {
+                    logger.log("=== response=== ");
+                    response.on("data", function (chunk) {
+                            logger.log("downloading... %s", chunk.length);
+                        })
+                })
+                .on("end",() => {
+
+                })
+
+
+            let writeStream = fs.createWriteStream(dst);
+            httpStream.pipe(writeStream);
+
+            return new Promise((resolve, reject) => {
+                writeStream.on("close", resolve);
+            })
+
+        }, {
+            max_tries: 3,
+            interval: 2000,
+            backoff: 1
+        })
+    },
 
     loadFromCache: function(cacheFileName) {
         return new Promise(function(resolve, reject) {
@@ -109,6 +121,7 @@ Spider.prototype = {
 
 
     crawlSearchPage: function() {
+
         let self = this;
         var cacheFileName = env.WORKING_DIR + this.movieIdTag + "_search_page";
         return self.loadFromCache(cacheFileName)
@@ -121,8 +134,9 @@ Spider.prototype = {
                 logger.log("search page requesting from: " + url);
                 return self.crawlPage(url)
                     .then(function(result) {
-                        self.writeToFile(result.text, cacheFileName);
-                        return self.getMovieUrlFromSearchResult(result.text);
+                        let movieUrl = self.getMovieUrlFromSearchResult(result.text);
+                        return self.writeToFile(result.text, cacheFileName)
+                                .then(() => {return movieUrl});
                     })
             })
 
@@ -140,94 +154,41 @@ Spider.prototype = {
                 return buffer;
             })
             .catch((err) => {
-                logger.log("movie page requesting from: " + movieUrl);
+                logger.log("Movie page not cached, crawling from: " + movieUrl);
                 return self.crawlPage(movieUrl)
                     .then(function (result) {
-                        self.writeToFile(result.text, cacheFileName);
-                        return result.text;
-                    })
-                    .catch(function (err) {
-                        logger.log(err);
+                        return self.writeToFile(result.text, cacheFileName)
+                            .then(() => {return result.text})
                     })
             })
     },
 
     parsingMetadata: function(html) {
-        // logger.log(html);
         var scrapper = new Scrapper();
         return scrapper.scrapeFromHtmlBuffer(html);
     }
 }
 
 
-var downloadImage = function(url, dst) {
-
-    logger.log("Start downloading image url = ", url);
-    return retry(function () {
-        var httpStream = request.get(url)
-            .timeout({
-                response: 20000,
-                deadline: 120000,
-            })
-            .on("response", (response) => {
-                response
-                    .on("data", function (chunk) {
-                        logger.log("downloading... %s", chunk.length);
-                    })
-                    .on("error", function (err) {
-                        logger.log("downloading timeout");
-                        throw err;
-                    })
-
-                logger.log(response.statusCode);
-            })
-            .on("error", (err) => {
-                logger.error(err);
-                if (err.timeout) {
-                    logger.debug("TIMEOUT!!!");
-                    throw err;
-                }
-            })
-            .on("end", (err, resposne) => {
-                logger.log(err, resposne);
-            })
-
-        var writeStream = fs.createWriteStream(dst);
-        httpStream.pipe(writeStream);
-
-        return new Promise(function (resolve, reject) {
-
-            writeStream.on("close", function () {
-                logger.debug("writeStream end");
-
-                resolve();
-            });
-            writeStream.on("error", reject);
-        })
-    }, {
-        max_tries: 3,
-        interval: 1000,
-        backoff: 1
-    })
-}
-
 var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
 
     if (fs.existsSync(posterImgFileName)) {
         logger.log("poster exists, no need to regenerate: %s", posterImgFileName);
-        return ;
+        return Promise.resolve();
     }
 
     logger.log("generatePosterFromFanart: ");
     logger.log("fanartImgFileName: " + fanartImgFileName);
     logger.log("posterImgFileName: " + posterImgFileName);
 
+    let idTag = utility.getIdTagFromFileName(fanartImgFileName).toString();
 
     let promise = new Promise(function (resolve, reject) {
         gm(fanartImgFileName)
             .size(function (err, size) {
 
                 if (err) {
+                    logger.log("gm:size " + err);
                     reject(err);
                 }
 
@@ -239,51 +200,51 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
                 var cropWidth = Math.floor(posterImgWidth/2 * 0.95);
 
                 //SOD (SDMS, SDDE) - crop 3 pixels
-                if (fanartImgFileName.search("SDDE") || fanartImgFileName.search("SDMS"))
+                if (idTag.search("SDDE") >= 0 || idTag.search("SDMS") >= 0)
                     cropWidth = cropWidth - 3;
                 //Natura High - crop 2 pixels
-                if (fanartImgFileName.search("NHDT"))
+                if (idTag.search("NHDT") >= 0)
                     cropWidth = cropWidth - 2;
                 //HTY - crop 1 pixel
-                if (fanartImgFileName.search("HTV"))
+                if (idTag.search("HTV") >= 0)
                     cropWidth = cropWidth - 1;
                 //Prestige (EVO, DAY, ZER, EZD, DOM) crop 1 pixel
-                if (fanartImgFileName.search("EVO") || fanartImgFileName.search("DAY") || fanartImgFileName.search("ZER") || fanartImgFileName.search("EZD") || fanartImgFileName.search("DOM") && posterImgHeight == 522)
+                if (idTag.search("EVO") >= 0 || idTag.search("DAY") >= 0 || idTag.search("ZER") >= 0 || idTag.search("EZD") >= 0 || idTag.search("DOM") >= 0 && posterImgHeight == 522)
                     cropWidth = cropWidth - 1;
                 //DOM - overcrop a little
-                if (fanartImgFileName.search("DOM") && posterImgHeight == 488)
+                if (idTag.search("DOM") >= 0 && posterImgHeight == 488)
                     cropWidth = cropWidth + 13;
                 //DIM - crop 5 pixels
-                if (fanartImgFileName.search("DIM"))
+                if (idTag.search("DIM") >= 0)
                     cropWidth = cropWidth - 5;
                 //DNPD - the front is on the left and a different crop routine will be used below
                 //CRZ - crop 5 pixels
-                if (fanartImgFileName.search("CRZ") && posterImgHeight == 541)
+                if (idTag.search("CRZ") >= 0 && posterImgHeight == 541)
                     cropWidth = cropWidth - 5;
                 //FSET - crop 2 pixels
-                if (fanartImgFileName.search("FSET") && posterImgHeight == 675)
+                if (idTag.search("FSET") >= 0 && posterImgHeight == 675)
                     cropWidth = cropWidth - 2;
                 //Moodyz (MIRD dual discs - the original code says to center the overcropping but provides no example so I'm not dooing anything for now)
                 //Opera (ORPD) - crop 1 pixel
-                if (fanartImgFileName.search("DIM"))
+                if (idTag.search("DIM") >= 0)
                     cropWidth = cropWidth - 1;
                 //Jade (P9) - crop 2 pixels
-                if (fanartImgFileName.search("P9"))
+                if (idTag.search("P9") >= 0)
                     cropWidth = cropWidth - 2;
                 //Rocket (RCT) - Crop 2 Pixels
-                if (fanartImgFileName.search("RCT"))
+                if (idTag.search("RCT") >= 0)
                     cropWidth = cropWidth - 2;
                 //SIMG - crop 10 pixels
-                if (fanartImgFileName.search("SIMG") && posterImgHeight == 864)
+                if (idTag.search("SIMG") >= 0 && posterImgHeight == 864)
                     cropWidth = cropWidth - 10;
                 //SIMG - crop 4 pixels
-                if (fanartImgFileName.search("SIMG") && posterImgHeight == 541)
+                if (idTag.search("SIMG") >= 0 && posterImgHeight == 541)
                     cropWidth = cropWidth - 4;
                 //SVDVD - crop 2 pixels
-                if (fanartImgFileName.search("SVDVD") && posterImgHeight == 950)
+                if (idTag.search("SVDVD") >= 0 && posterImgHeight == 950)
                     cropWidth = cropWidth - 4;
                 //XV-65 - crop 6 pixels
-                if (fanartImgFileName.search("XV-65") && posterImgHeight == 750)
+                if (idTag.search("XV-65" >= 0) && posterImgHeight == 750)
                     cropWidth = cropWidth - 6;
                 //800x538 - crop 2 pixels
                 if (posterImgHeight == 538 && posterImgWidth == 800)
@@ -311,21 +272,10 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
     return promise;
 }
 
-var scrape = function(idtag) {
+var scrape = function (idtag) {
 
-    logger.log("start scrapping : " + idtag);
     let spider = new Spider({movieIdTag: idtag});
-    return spider.crawlSearchPage()
-        .then(spider.crawlMoviePage.bind(spider))   // step 1: crawl page
-        .then(function(htmlBuffer) {
-            var metadata = spider.parsingMetadata(htmlBuffer);
-            return metadata;
-        })
-}
 
-
-var scrapeFull = function (idtag) {
-    let spider = new Spider({movieIdTag: idtag});
     return spider.crawlSearchPage()
         .then(spider.crawlMoviePage.bind(spider))   // step 1: crawl page
         .then(function(htmlBuffer) {                // step 2: scrape metadata & generate nfo
@@ -346,7 +296,7 @@ var scrapeFull = function (idtag) {
 
                 logger.log("Fanart not exists, downloading to %s", fanartFileName);
 
-                return downloadImage(metadata.fanart, fanartFileName)
+                return spider.crawlImage(metadata.poster, fanartFileName)
                     .then(() => {
                         logger.log("Fanart downloaded: %s", fanartFileName);
                         return metadata;
@@ -364,14 +314,10 @@ var scrapeFull = function (idtag) {
             return generatePosterFromFanart(fanartFileName, posterFileName)
                 .then(() => {return metadata})
         })
-        .catch( (err) => {
-            logger.log(err);
-        })
 
 }
 
 module.exports = {
-    scrape: scrape,
-    scrapeFull: scrapeFull
+    scrape: scrape
 }
 

@@ -3,6 +3,7 @@ var C = require("./const")
 
 var fs = require("fs-extra"),
     path = require("path")
+    logger = require("tracer").console();
 
 //递归创建目录 同步方法
 function mkdirsSync(dirname) {
@@ -23,7 +24,8 @@ var isVideoFile = function (file) {
         || ext == ".mp4"
         || ext == ".rmvb"
         || ext == ".rm"
-        || ext == ".mkv") {
+        || ext == ".mkv"
+        || ext == ".wmv") {
         return true;
     }
     else
@@ -58,6 +60,17 @@ var getPosterFilePath = function (idTag) {
     return C.WORKING_DIR + idTag + "-poster.jpg";
 }
 
+var requireLogger = function () {
+    return require("tracer").colorConsole({
+        transport : function(data) {
+            console.log(data.output);
+            fs.appendFile(C.LOG_LOC, data.output + '\n', (err) => {
+                if (err) throw err;
+            });
+        }
+    });
+}
+
 module.exports = {
     mkdir: mkdirsSync,
     isVideoFile: isVideoFile,
@@ -65,5 +78,6 @@ module.exports = {
     getIdTagFromFileName: getIdTagFromFileName,
     getNfoFilePath: getNfoFilePath,
     getFanartFilePath: getFanartFilePath,
-    getPosterFilePath: getPosterFilePath
+    getPosterFilePath: getPosterFilePath,
+    requireLogger: requireLogger
 }

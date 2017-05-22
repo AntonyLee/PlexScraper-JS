@@ -1,12 +1,13 @@
 var program = require("commander"),
     fs = require("fs-extra"),
     path = require("path"),
-    format = require("string-format"),
-    logger = require("tracer").colorConsole();
+    format = require("string-format")
 
 var spider = require("./spider"),
     utility = require("./utility"),
     env = require("./const")
+
+var logger = utility.requireLogger();
 
 program.version("0.0.1")
         .option('-d, --dir [value]', 'Set folder to traverse', '')
@@ -75,6 +76,8 @@ var moveVideoFile = function(videoFile, metadata) {
         }
     });
 
+    if (actorsStr === "")
+        actorsStr = "素人";
 
     let titleName = format("({0})({1}){2}", metadata.id, metadata.studio, metadata.title);
     let dstPath = path.join(env.MOVE_TO_DIR_ROOT, actorsStr, titleName);
@@ -131,7 +134,7 @@ function scrapeABatch(videos) {
 
         let idTag = utility.getIdTagFromFileName(video.toString());
 
-        let promise = spider.scrapeFull(idTag)
+        let promise = spider.scrape(idTag)
             .then((metadata) => {
                 if (program.moveFile) {
                     return moveVideoFile(video, metadata);
@@ -139,11 +142,9 @@ function scrapeABatch(videos) {
                     return metadata;
                 }
             })
-
-        promise.catch((err) => {
-            logger.log(err);
-            throw err;
-        })
+            .catch((err) => {
+                logger.log(err);
+            })
 
         promises.push(promise);
     })

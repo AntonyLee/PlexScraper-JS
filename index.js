@@ -5,7 +5,7 @@ var program = require("commander"),
 
 var spider = require("./spider"),
     utility = require("./utility"),
-    env = require("./const")
+    C = require("./const")
 
 var logger = utility.requireLogger();
 
@@ -13,6 +13,7 @@ program.version("0.0.1")
         .option('-d, --dir [value]', 'Set folder to traverse', '')
         .option('-m, --maxdepth <n>', 'Set search depth', parseInt)
         .option('-r, --moveFile', "Move file to new folder", false)
+        .option('--refresh-cache', "Abandon cached file", false)
         .parse(process.argv);
 
 const ROOT_DIR = program.dir;
@@ -22,7 +23,7 @@ let videoFiles = [];
 let foldersToTraverse = [];
 
 var traverseDir = function(dir, depth) {
-    logger.log("Traversing dir %s, depth %j", dir, depth);
+    logger.debug("Traversing dir %s, depth %j", dir, depth);
 
     if (!dir) {
         logger.log("Invalid dir: " + dir);
@@ -38,32 +39,58 @@ var traverseDir = function(dir, depth) {
         return ;
     }
 
-    if (!fs.lstatSync(dir).isDirectory())
-        return ;
+    let state = fs.lstatSync(dir);
+    if (!state.isDirectory()) {
+        if (state.isFile()) {
+            videoFiles.push(dir);
+            return ;
+        }
+    }
 
     files = fs.readdirSync(dir);
     files.forEach((file) => {
         let absPath = path.join(dir, file);
-        // logger.log("path: %s", absPath);
 
         let stat = fs.lstatSync(absPath);
         if (stat.isDirectory()) {
-            // logger.log("New directory located: " + absPath);
             foldersToTraverse.push({path: absPath, depth: depth + 1});
         } else if (utility.isVideoFile(file) && utility.isCensoredVideo(file)) {
             logger.log("Video file located: " + absPath);
             videoFiles.push(absPath);
         }
 
-
         let nextDir = foldersToTraverse.pop();
         if (nextDir)
             traverseDir(nextDir.path, nextDir.depth);
     })
-
-    logger.log("Traversing finished.");
 }
 
+var moveVideoFileToUndefineFolder = function(videoFile) {
+    let dstPath = path.join(C.MOVE_TO_DIR_ROOT, "undefine");
+    if (!(fs.existsSync(dstPath))) {
+        utility.mkdir(dstPath);
+    }
+
+    let videoFileBaseName = path.basename(videoFile);
+
+    let renameArr = [];
+    renameArr.push({
+        from: videoFile,
+        to: path.join(dstPath, videoFileBaseName)
+    })
+
+    let promises = [];
+    renameArr.forEach((rename) => {
+        logger.log(rename);
+        promises.push(fs.rename(rename.from, rename.to));
+    })
+
+    return Promise.all(promises).then(()=> {return {};})
+        .catch(err => {
+            logger.error(err);
+            throw err;
+        })
+}
 
 var moveVideoFile = function(videoFile, metadata) {
     let actorsStr = "";
@@ -79,8 +106,12 @@ var moveVideoFile = function(videoFile, metadata) {
     if (actorsStr === "")
         actorsStr = "素人";
 
+    let idTag = metadata.id;
+
     let titleName = format("({0})({1}){2}", metadata.id, metadata.studio, metadata.title);
-    let dstPath = path.join(env.MOVE_TO_DIR_ROOT, actorsStr, titleName);
+    titleName = utility.normalizePath(titleName);
+
+    let dstPath = path.join(C.MOVE_TO_DIR_ROOT, actorsStr, titleName);
 
     if (!fs.existsSync(dstPath))
         utility.mkdir(dstPath);
@@ -93,24 +124,24 @@ var moveVideoFile = function(videoFile, metadata) {
     // 1. video file
     renameArr.push({
         from: videoFile,
-        to: path.join(dstPath, titleName+videoFileExtName)
+        to: path.join(dstPath, idTag + videoFileExtName)
     })
 
     // 2. nfo file
     renameArr.push({
-        from: utility.getNfoFilePath(metadata.id),
-        to: path.join(dstPath, titleName + ".nfo"),
+        from: utility.getNfoFilePath(idTag),
+        to: path.join(dstPath, idTag + ".nfo")
     })
 
 
     // 3. fanart files
     renameArr.push({
         from: utility.getFanartFilePath(metadata.id),
-        to: path.join(dstPath, titleName + "-fanart.jpg")
+        to: path.join(dstPath, idTag + "-fanart.jpg")
     });
     renameArr.push({
         from: utility.getPosterFilePath(metadata.id),
-        to: path.join(dstPath, titleName + "-poster.jpg")
+        to: path.join(dstPath, idTag + "-poster.jpg")
     });
 
 
@@ -122,6 +153,10 @@ var moveVideoFile = function(videoFile, metadata) {
     })
 
     return Promise.all(promises).then(()=> {return metadata;})
+        .catch(err => {
+            logger.error(err);
+            throw err;
+        })
 }
 
 function scrapeABatch(videos) {
@@ -134,7 +169,7 @@ function scrapeABatch(videos) {
 
         let idTag = utility.getIdTagFromFileName(video.toString());
 
-        let promise = spider.scrape(idTag)
+        let promise = spider.scrape(idTag, program.refreshCache)
             .then((metadata) => {
                 if (program.moveFile) {
                     return moveVideoFile(video, metadata);
@@ -142,8 +177,18 @@ function scrapeABatch(videos) {
                     return metadata;
                 }
             })
-            .catch((err) => {
-                logger.log(err);
+            .catch(err => {
+                if (err.message === C.NO_SEARCH_RESULT) {
+                    logger.warn("No Search Result, move to undefine folder");
+
+                    return moveVideoFileToUndefineFolder(video);
+                }
+            })
+            .then(() => {
+                logger.log("Done scrapping and move for %s", idTag);
+            })
+            .catch((err) => {           // end of the promise chain for scrapping one single movie, need handle error here finally
+                logger.error(err);
             })
 
         promises.push(promise);
@@ -154,10 +199,10 @@ function scrapeABatch(videos) {
 
 var scrapeAllVideos = function (videos) {
 
-    logger.log("scrapeAllVideos")
+    logger.log("Start scrapping all videos, count: %d", videos.length);
 
     if (videos.length <= 0) {
-        logger.log("No videos to scrape");
+        logger.warn("No videos to scrape");
         return ;
     }
 
@@ -168,7 +213,7 @@ var scrapeAllVideos = function (videos) {
     let batches = [];
     for (let i = 0; i < batchCount; ++i) {
         let batch = videos.slice(0, VIDEO_COUNT_A_BATCH);
-        logger.log("batch: %s", batch);
+        logger.debug("batch: %s", batch);
         batches.push(batch);
         videos.splice(0, VIDEO_COUNT_A_BATCH);
     }
@@ -193,14 +238,15 @@ var scrapeAllVideos = function (videos) {
 
 
 var prepareEnv = function() {
-    if (!fs.existsSync(env.WORKING_DIR)) {
-        utility.mkdir(env.WORKING_DIR);
+    if (!fs.existsSync(C.WORKING_DIR)) {
+        utility.mkdir(C.WORKING_DIR);
     }
 }
 
 var main = function () {
     prepareEnv();
     traverseDir(ROOT_DIR);
+    logger.trace(videoFiles);
     scrapeAllVideos(videoFiles);
 }
 

@@ -20,6 +20,7 @@ function mkdirsSync(dirname) {
 
 var isVideoFile = function (file) {
     let ext = path.extname(file);
+    ext = ext.toLowerCase();
     if (ext == ".avi"
         || ext == ".mp4"
         || ext == ".rmvb"
@@ -34,6 +35,7 @@ var isVideoFile = function (file) {
 
 var isCensoredVideo = function(file) {
     let result = false;
+    file = file.toLowerCase();
     if (file.search(C.REGEX_IDTAG) >= 0) {
         return true;
     }
@@ -71,6 +73,12 @@ var requireLogger = function () {
     });
 }
 
+var normalizePath = function (pathName) {
+    pathName = pathName.replace(":", "");
+    pathName = pathName.replace("*", "");
+    return pathName;
+}
+
 module.exports = {
     mkdir: mkdirsSync,
     isVideoFile: isVideoFile,
@@ -79,5 +87,6 @@ module.exports = {
     getNfoFilePath: getNfoFilePath,
     getFanartFilePath: getFanartFilePath,
     getPosterFilePath: getPosterFilePath,
-    requireLogger: requireLogger
+    requireLogger: requireLogger,
+    normalizePath: normalizePath
 }

@@ -12,7 +12,7 @@ var fs = require("fs-extra"),
 
 var Scrapper = require("./scrapper.js");
     utility = require("./utility"),
-    env = require("./const")
+    C = require("./const")
 
 var logger = utility.requireLogger();
 
@@ -20,6 +20,7 @@ function Spider(options) {
     options = this.options = options || {};
 
     this.movieIdTag = options.movieIdTag;
+    this.refreshCache = options.refreshCache;
 }
 
 Spider.prototype = {
@@ -41,7 +42,7 @@ Spider.prototype = {
         var $ = cheerio.load(searchResult);
         var movieUrl = $(".movie-box").attr("href");
 
-        logger.log("Movie Url = " + movieUrl);
+        logger.info("Movie Url = " + movieUrl);
 
         return movieUrl;
     },
@@ -54,19 +55,19 @@ Spider.prototype = {
 
             return request.get(url)
                 .timeout({
-                    response: 5000,
-                    deadline: 10000,
+                    response: 10000,
+                    deadline: 20000,
                 })
                 .then(function (response) {
                     let result = response.res;
                     return result;
                 })
                 .catch(function (error) {
-                    logger.log(error);
+                    logger.error(error);
                     throw error;
                 })
         }, {
-            max_tries: 2,
+            max_tries: 5,
             interval: 5000,
             backoff: 1,
         })
@@ -83,15 +84,13 @@ Spider.prototype = {
                     deadline: 30000,
                 })
                 .on("response", (response) => {
-                    logger.log("=== response=== ");
+                    let totalLength = 0;
+                    logger.log("=== response=== ", response.res.statusCode);
                     response.on("data", function (chunk) {
-                            logger.log("downloading... %s", chunk.length);
+                            totalLength += chunk.length;
+                            logger.log("downloading... %s", totalLength);
                         })
                 })
-                .on("end",() => {
-
-                })
-
 
             let writeStream = fs.createWriteStream(dst);
             httpStream.pipe(writeStream);
@@ -101,13 +100,18 @@ Spider.prototype = {
             })
 
         }, {
-            max_tries: 3,
+            max_tries: 5,
             interval: 2000,
             backoff: 1
         })
     },
 
     loadFromCache: function(cacheFileName) {
+
+        if (this.refreshCache) {
+            return Promise.reject(new Error("Abandon cache"));
+        }
+
         return new Promise(function(resolve, reject) {
             fs.readFile(cacheFileName, function(err, buffer) {
                 if (err) {
@@ -123,15 +127,15 @@ Spider.prototype = {
     crawlSearchPage: function() {
 
         let self = this;
-        var cacheFileName = env.WORKING_DIR + this.movieIdTag + "_search_page";
+        var cacheFileName = C.WORKING_DIR + this.movieIdTag + "_search_page";
         return self.loadFromCache(cacheFileName)
             .then(function(buffer) {
-                logger.log("search page loaded from cache: " + cacheFileName);
+                logger.log("Search page loaded from cache: " + cacheFileName);
                 return self.getMovieUrlFromSearchResult(buffer);
             })
             .catch(function(err) {
                 var url = self.getSearchUrl();
-                logger.log("search page requesting from: " + url);
+                logger.log("Crawling search page: " + url);
                 return self.crawlPage(url)
                     .then(function(result) {
                         let movieUrl = self.getMovieUrlFromSearchResult(result.text);
@@ -144,9 +148,15 @@ Spider.prototype = {
 
     crawlMoviePage: function(movieUrl) {
         logger.log("Crawling movie page: " + movieUrl);
+
+        if (!(movieUrl)) {
+            throw new Error(C.NO_SEARCH_RESULT);
+            return {};
+        }
+
         let self = this;
         // check search result exists
-        var cacheFileName = env.WORKING_DIR + this.movieIdTag + "_movie_page";
+        var cacheFileName = C.WORKING_DIR + this.movieIdTag + "_movie_page";
 
         return self.loadFromCache(cacheFileName)
             .then((buffer) => {
@@ -173,7 +183,7 @@ Spider.prototype = {
 var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
 
     if (fs.existsSync(posterImgFileName)) {
-        logger.log("poster exists, no need to regenerate: %s", posterImgFileName);
+        logger.info("poster exists, no need to regenerate: %s", posterImgFileName);
         return Promise.resolve();
     }
 
@@ -188,14 +198,12 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
             .size(function (err, size) {
 
                 if (err) {
-                    logger.log("gm:size " + err);
-                    reject(err);
+                    fs.removeSync(fanartImgFileName);
+                    return reject(err);
                 }
 
                 let posterImgWidth = size.width;
                 let posterImgHeight = size.height;
-
-                logger.log("{posterImgWidth: %d, posterImgHeight : %d}", posterImgWidth, posterImgHeight);
 
                 var cropWidth = Math.floor(posterImgWidth/2 * 0.95);
 
@@ -272,9 +280,12 @@ var generatePosterFromFanart = function(fanartImgFileName, posterImgFileName) {
     return promise;
 }
 
-var scrape = function (idtag) {
+var scrape = function (idtag, refreshCache) {
 
-    let spider = new Spider({movieIdTag: idtag});
+    let spider = new Spider({
+        movieIdTag: idtag,
+        refreshCache: refreshCache
+    });
 
     return spider.crawlSearchPage()
         .then(spider.crawlMoviePage.bind(spider))   // step 1: crawl page

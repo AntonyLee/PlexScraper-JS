@@ -13,6 +13,7 @@ function Scrapper() {
 }
 
 Scrapper.prototype = {
+
     constructor: Scrapper,
 
     scrapeIDTag: function($) {
@@ -211,16 +212,18 @@ Scrapper.prototype = {
                     movie.endElement();
                     xw.endDocument();
 
-                    logger.log("xw.toString() " + xw.toString());
+                    logger.debug("xw.toString() " + xw.toString());
                 } catch (err) {
-                    logger.log(err);
+                    logger.error(err);
+                    throw err;
                 }
                 return xw.toString();
             }
 
 
         } catch(err) {
-            logger.log(err);
+            logger.error(err);
+            throw err;
         }
 
         return metadata;
